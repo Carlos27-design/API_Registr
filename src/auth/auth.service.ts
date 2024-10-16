@@ -1,95 +1,107 @@
-import { Usuario } from './../shared/entity/usuario.entity';
 import {
   BadRequestException,
   Injectable,
   InternalServerErrorException,
   UnauthorizedException,
 } from '@nestjs/common';
+
+import { CreateUserDto, LoginDto, RegisterDto } from '../shared/dto';
 import { InjectModel } from '@nestjs/mongoose';
+import { Usuario } from 'src/shared/entity/usuario.entity';
 import { Model } from 'mongoose';
-import { CreateUserDto } from 'src/shared/dto/create-user.dto';
 import * as bcryptjs from 'bcryptjs';
-import { Rol } from 'src/shared/entity/rol.entity';
-import { LoginDto } from 'src/shared/dto/login.dto';
-import { LoginResponse } from 'src/shared/interface/login_response';
-import { JwtPayload } from 'src/shared/interface/jwt-payload';
 import { JwtService } from '@nestjs/jwt';
+import { JwtPayload } from '../shared/interface/jwt-payload';
+import { LoginResponse } from 'src/shared/interface/login_response';
 
 @Injectable()
 export class AuthService {
   constructor(
     @InjectModel(Usuario.name)
-    private UsuarioModel: Model<Usuario>,
-    @InjectModel(Rol.name)
-    private RolModel: Model<Rol>,
-
-    private jwtService: JwtService
+    private userModel: Model<Usuario>,
+    private jwtService: JwtService,
   ) {}
 
   public async create(createUserDto: CreateUserDto): Promise<Usuario> {
     try {
-      const { password, roles, ...userData } = createUserDto;
-
-      const roleExists = await this.RolModel.findById(roles);
-      if (!roleExists) {
-        throw new BadRequestException(
-          `El rol ${roles} no existe en la base de datos`,
-        );
-      }
-
-      const newUser = new this.UsuarioModel({
+      const { password, ...userData } = createUserDto;
+      const newUser = new this.userModel({
         password: bcryptjs.hashSync(password, 10),
-        roles,
         ...userData,
       });
-
       await newUser.save();
-
       const { password: _, ...user } = newUser.toJSON();
 
       return user;
-    } catch (err) {
-      if (err.code === 11000) {
-        throw new BadRequestException(`${createUserDto.email} ya existe!`);
+    } catch (error) {
+      if (error.code === 11000) {
+        throw new BadRequestException(`${createUserDto.email} already exists!`);
       }
-
-      throw new InternalServerErrorException(
-        'Algo valio sal al crear el usuario',
-      );
+      throw new InternalServerErrorException('something terrible happen!!!');
     }
   }
 
   public async login(loginDto: LoginDto): Promise<LoginResponse> {
     const { email, password } = loginDto;
-    const user = await this.UsuarioModel.findOne({ email });
+
+    const user = await this.userModel.findOne({ email });
+
     if (!user) {
-      throw new UnauthorizedException('El usuario no existe o el Correo es incorrecto');
+      throw new UnauthorizedException('Not valid credentials - email');
     }
 
     if (!bcryptjs.compareSync(password, user.password)) {
-      throw new UnauthorizedException('La contraseña es incorrecta');
+      throw new UnauthorizedException('Not valid credentials - password');
     }
 
-    const { password: _, ...userData } = user.toJSON();
+    const { password: _, ...rest } = user.toJSON();
 
     return {
-      user: userData,
-      token: this.generateJWT({
-        id: userData._id
-      })
+      user: rest,
+      token: this.getJwtToken({
+        id: user.id,
+        roles: user.roles,
+        name: user.name,
+      }),
     };
   }
-  public async findUserById(userId: string): Promise<Usuario>{
-    const user = await this.UsuarioModel.findById(userId);
-    const { password, ...dataUser} = user.toJSON(); 
 
+  public async register(registerDto: RegisterDto): Promise<LoginResponse> {
+    const user = await this.create(registerDto);
+    return {
+      user: user,
+      token: this.getJwtToken({
+        id: user._id,
+        roles: user.roles,
+        name: user.name,
+      }),
+    };
+  }
+
+  public async findUserById(userId: string): Promise<Usuario> {
+    const user = await this.userModel.findById(userId);
+    const { password, ...dataUser } = user.toJSON();
     return dataUser;
   }
 
-  public generateJWT(payload: JwtPayload) {
+  public findAll(): Promise<Usuario[]> {
+    return this.userModel.find();
+  }
 
+  // public findOne(id: number) {
+  // return `This action returns a #${id} auth`;
+  // }
+
+  //update(id: number, updateUserDto: UpdateUserDto) {
+  //return `This action updates a #${id} auth`;
+  //}
+
+  //remove(id: number) {
+  // return `This action removes a #${id} auth`;
+  //}
+
+  getJwtToken(payload: JwtPayload) {
     const token = this.jwtService.sign(payload);
-
     return token;
   }
 }
